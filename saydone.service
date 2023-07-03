@@ -1,0 +1,13 @@
+# saydone.service
+[Unit]
+Description=saydone opensource project
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /usr/bin/saydone
+ExecStop=/bin/rm -f /var/log/saydone
+
+
+[Install]
+WantedBy=multi-user.target
