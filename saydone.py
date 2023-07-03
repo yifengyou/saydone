@@ -8,15 +8,20 @@
 import argparse
 import os
 import datetime
+import subprocess
 import sys
+
+import select
 
 CURRENT_VERSION = "0.1.0"
 PIPE_PATH = "/var/log/saydone"
-LOG_PATH = "/var/log/saydone.txt"
+LOG_PATH = "/var/log/saydone.log"
 DEBUG = False
 
 
+# weixin : https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=f93f7403-bcbd-4053-be85-339a8017601c
 # PROMPT_COMMAND='if [ -e /var/log/saydone ]; then echo "$? $USER `fc -ln -0`" > /var/log/saydone ; fi'
+
 def check_python_version():
     current_python = sys.version_info[0]
     if current_python == 3:
@@ -32,13 +37,21 @@ def timestamp():
     return beijing_time.strftime("%Y/%m/%d %H:%M:%S")
 
 
+def check_privilege():
+    if os.getuid() == 0:
+        return
+    else:
+        print("superuser root privileges are required to run")
+        print(f"  sudo kdev {' '.join(sys.argv[1:])}")
+        sys.exit(1)
+
+
 def handle_daemon(args):
     if not os.path.exists(PIPE_PATH):
         os.mkfifo(PIPE_PATH)
         os.chmod(PIPE_PATH, 0o666)
     log_file = open(LOG_PATH, "a")
-    # pid = os.fork()
-    # if pid == 0:
+
     while True:
         pipe_file = open(PIPE_PATH, "r")
         content = pipe_file.read()
@@ -52,17 +65,49 @@ def handle_daemon(args):
             current_time = timestamp()
             log_file.write(f"ret:{ret} user:{user} time:{current_time} cmd:{cmd}\n")
             log_file.flush()
-    # else:
-    #     exit(0)
+
     print(" handle daemon done!")
 
 
 def handle_stop(args):
-    print(" handle stop done!")
+    retcode, _, _ = do_exe_cmd("sudo systemctl stop saydone.service", print_output=True)
+    print(f" handle stop done! ret={retcode}")
 
 
 def handle_start(args):
-    print(" handle start done!")
+    retcode, _, _ = do_exe_cmd("sudo systemctl start saydone.service", print_output=True)
+    print(f" handle start done! ret={retcode}")
+
+
+def do_exe_cmd(cmd, print_output=False, shell=False):
+    stdout_output = ''
+    stderr_output = ''
+    if isinstance(cmd, str):
+        cmd = cmd.split()
+    elif isinstance(cmd, list):
+        pass
+    else:
+        raise Exception("unsupported type when run do_exec_cmd", type(cmd))
+
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=shell)
+    while True:
+        rlist, _, _ = select.select([p.stdout, p.stderr], [], [], 0.1)
+        for f in rlist:
+            line = f.readline().decode('utf-8').strip()
+            if line:
+                if f == p.stdout:
+                    if print_output == True:
+                        print("STDOUT", line)
+                    stdout_output += line + '\n'
+                    sys.stdout.flush()
+                elif f == p.stderr:
+                    if print_output == True:
+                        print("STDERR", line)
+                    stderr_output += line + '\n'
+                    sys.stderr.flush()
+        if p.poll() is not None:
+            break
+    return p.returncode, stdout_output, stderr_output
 
 
 def main():
