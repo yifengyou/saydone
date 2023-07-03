@@ -5,7 +5,7 @@ Description=saydone opensource project
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/bin/python3 /usr/bin/saydone
+ExecStart=/usr/bin/python3 /usr/bin/saydone daemon
 ExecStop=/bin/rm -f /var/log/saydone
 
 
