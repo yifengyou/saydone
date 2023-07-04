@@ -6,10 +6,14 @@
    yifengyou <842056007@qq.com>
 """
 import argparse
+import json
 import os
 import datetime
 import subprocess
 import sys
+import multiprocessing
+import queue
+import requests
 
 import select
 
@@ -21,6 +25,55 @@ DEBUG = False
 
 # weixin : https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=f93f7403-bcbd-4053-be85-339a8017601c
 # PROMPT_COMMAND='if [ -e /var/log/saydone ]; then echo "$? $USER `fc -ln -0`" > /var/log/saydone ; fi'
+
+class Wecom():
+    """
+    企业微信群聊机器人
+    官方文档：https://developer.work.weixin.qq.com/document/path/91770
+    每个机器人发送的消息不能超过20条/分钟，大概3s一条即可
+    """
+
+    def __init__(self, key=None):
+        if key is None:
+            raise Exception(" wecom api key is None ")
+        self._key = key
+
+    def do_send(self, data):
+        res = None
+        headers = {'Content-Type': 'application/json'}
+        url = f'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={self._key}'
+        r = requests.post(url=url, headers=headers, data=json.dumps(data))
+        # print(r.text)
+        try:
+            res = json.loads(r.text)
+        except:
+            pass
+        if r.status_code == 200 and res and 'errcode' in res and 0 == res['errcode']:
+            print('[+] wecomBot 发送成功')
+        else:
+            print('[-] wecomBot 发送失败')
+            print(r.text)
+
+    def send_markdown(self, msg):
+        data = {
+            "msgtype": "markdown",
+            "markdown": {
+                "content": msg,
+            },
+        }
+        self.do_send(data)
+
+    def send_text(self, msg="", mentioned_mobile_list=[]):
+        data = {
+            "msgtype": "text",
+            "text": {
+                "content": msg,
+                "mentioned_list": [],
+                "mentioned_mobile_list": mentioned_mobile_list,
+            }
+        }
+        self.do_send(data)
+
 
 def check_python_version():
     current_python = sys.version_info[0]
@@ -42,11 +95,22 @@ def check_privilege():
         return
     else:
         print("superuser root privileges are required to run")
-        print(f"  sudo kdev {' '.join(sys.argv[1:])}")
+        print(f"  sudo saydone {' '.join(sys.argv[1:])}")
         sys.exit(1)
 
 
-def handle_daemon(args):
+# 定义一个消费者函数，接受一个队列作为参数
+def sender(args):
+    q = args.q
+    wecom_sender = Wecom(key='f93f7403-bcbd-4053-be85-339a8017601c')
+    # 从队列中获取字符串，并发送请求到服务器
+    while True:
+        msg = q.get()
+        print(f"sender got {msg} from queue")
+        wecom_sender.send_text(msg=msg)
+
+
+def creator(args):
     if not os.path.exists(PIPE_PATH):
         os.mkfifo(PIPE_PATH)
         os.chmod(PIPE_PATH, 0o666)
@@ -63,8 +127,28 @@ def handle_daemon(args):
             user = content_list[1]
             cmd = content_list[2:]
             current_time = timestamp()
-            log_file.write(f"ret:{ret} user:{user} time:{current_time} cmd:{cmd}\n")
+            info = f"ret:{ret} user:{user} time:{current_time} cmd:{cmd}\n"
+            log_file.write(info)
             log_file.flush()
+            args.q.put(info)
+
+
+def handle_daemon(args):
+    # 创建一个队列，用于存储生产者和消费者之间的数据
+    args.q = multiprocessing.Queue()
+
+    # 创建一个生产者
+    p1 = multiprocessing.Process(target=creator, args=(args,))
+    # 创建两个消费者进程，并启动它们
+    c1 = multiprocessing.Process(target=sender, args=(args,))
+    c2 = multiprocessing.Process(target=sender, args=(args,))
+
+    p1.start()
+    c1.start()
+    c2.start()
+    p1.join()
+    c1.join()
+    c2.join()
 
     print(" handle daemon done!")
 
