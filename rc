@@ -1,0 +1,13 @@
+
+# saydone
+function saydone_prompt_command() {
+  RET=$?
+  if [ -e /var/log/saydone ]; then 
+        echo "$RET $USER `fc -ln -0`" > /var/log/saydone
+  fi
+  return $RET
+}
+PROMPT_COMMAND=saydone_prompt_command
+
+
+

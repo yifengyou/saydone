@@ -12,19 +12,42 @@ import datetime
 import subprocess
 import sys
 import multiprocessing
-import queue
 import requests
-
+import logging
 import select
 
 CURRENT_VERSION = "0.1.0"
 PIPE_PATH = "/var/log/saydone"
 LOG_PATH = "/var/log/saydone.log"
-DEBUG = False
+
+# 创建一个日志对象，设置日志级别和格式
+logger = logging.getLogger("producer_consumer")
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+# 创建一个文件处理器，将日志输出到文件中
+file_handler = logging.FileHandler(LOG_PATH)
+file_handler.setFormatter(formatter)
+# 将文件处理器添加到日志对象中
+logger.addHandler(file_handler)
 
 
 # weixin : https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=f93f7403-bcbd-4053-be85-339a8017601c
 # PROMPT_COMMAND='if [ -e /var/log/saydone ]; then echo "$? $USER `fc -ln -0`" > /var/log/saydone ; fi'
+# # PROMPT_COMMAND='if [ -e /var/log/saydone ]; then set ret=$?; echo "$ret $USER `fc -ln -0`" > /var/log/saydone ; return $ret ; fi'
+
+# # 定义一个函数，将上一条命令的返回值写入一个文件
+# function save_exit_status() {
+#   RET=$?
+#   if [ -e /var/log/saydone ]; then
+#         echo "$RET $USER `fc -ln -0`" > /var/log/saydone
+#   fi
+#   return $RET
+# }
+#
+# # 将该函数赋给PROMPT_COMMAND变量，使其在每个提示符之前执行
+# PROMPT_COMMAND=save_exit_status
+
+
 
 class Wecom():
     """
@@ -49,10 +72,10 @@ class Wecom():
         except:
             pass
         if r.status_code == 200 and res and 'errcode' in res and 0 == res['errcode']:
-            print('[+] wecomBot 发送成功')
+            logger.info('[+] wecomBot 发送成功')
         else:
-            print('[-] wecomBot 发送失败')
-            print(r.text)
+            logger.info('[-] wecomBot 发送失败')
+            logger.info(r.text)
 
     def send_markdown(self, msg):
         data = {
@@ -83,7 +106,7 @@ def check_python_version():
         raise Exception('Invalid python version requested: %d' % current_python)
 
 
-def timestamp():
+def beijing_timestamp():
     utc_time = datetime.datetime.utcnow()
     beijing_tz = datetime.timezone(datetime.timedelta(hours=8))
     beijing_time = utc_time.astimezone(beijing_tz)
@@ -99,58 +122,53 @@ def check_privilege():
         sys.exit(1)
 
 
-# 定义一个消费者函数，接受一个队列作为参数
-def sender(args):
+def msg_sender(args):
     q = args.q
     wecom_sender = Wecom(key='f93f7403-bcbd-4053-be85-339a8017601c')
-    # 从队列中获取字符串，并发送请求到服务器
     while True:
         msg = q.get()
-        print(f"sender got {msg} from queue")
-        wecom_sender.send_text(msg=msg)
+
+        msg_list = msg.split()
+        retcode = msg_list[0]
+        runuser = msg_list[1]
+        cmdline = " ".join(msg_list[2:])
+        timestamp = beijing_timestamp()
+        format_msg = f"saydone消息播报:\n命令:{cmdline}\n返回值:{retcode}\n执行用户:{runuser}\n结束时间:{timestamp}"
+
+        wecom_sender.send_text(msg=format_msg)
+        logger.info(f"msg_sender send: \n{format_msg}")
+
+        q.task_done()
 
 
-def creator(args):
+def msg_creator(args):
     if not os.path.exists(PIPE_PATH):
         os.mkfifo(PIPE_PATH)
         os.chmod(PIPE_PATH, 0o666)
-    log_file = open(LOG_PATH, "a")
 
     while True:
         pipe_file = open(PIPE_PATH, "r")
         content = pipe_file.read()
         pipe_file.close()
-
-        if content:
-            content_list = content.split()
-            ret = content_list[0]
-            user = content_list[1]
-            cmd = content_list[2:]
-            current_time = timestamp()
-            info = f"ret:{ret} user:{user} time:{current_time} cmd:{cmd}\n"
-            log_file.write(info)
-            log_file.flush()
-            args.q.put(info)
+        args.q.put(content)
+        logger.info(f"msg_create created : {content}")
 
 
 def handle_daemon(args):
     # 创建一个队列，用于存储生产者和消费者之间的数据
-    args.q = multiprocessing.Queue()
+    args.q = multiprocessing.JoinableQueue()
 
-    # 创建一个生产者
-    p1 = multiprocessing.Process(target=creator, args=(args,))
-    # 创建两个消费者进程，并启动它们
-    c1 = multiprocessing.Process(target=sender, args=(args,))
-    c2 = multiprocessing.Process(target=sender, args=(args,))
+    p1 = multiprocessing.Process(target=msg_creator, args=(args,))
+
+    # 创建消费者进程
+    c1 = multiprocessing.Process(target=msg_sender, args=(args,))
+    c2 = multiprocessing.Process(target=msg_sender, args=(args,))
 
     p1.start()
     c1.start()
     c2.start()
-    p1.join()
-    c1.join()
-    c2.join()
 
-    print(" handle daemon done!")
+    args.q.join()
 
 
 def handle_stop(args):
@@ -195,15 +213,21 @@ def do_exe_cmd(cmd, print_output=False, shell=False):
 
 
 def main():
-    global DEBUG, CURRENT_VERSION
+    global CURRENT_VERSION
     check_python_version()
 
     # 顶层解析
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("-v", "--version", action="store_true",
-                        help="show program's version number and exit")
-    parser.add_argument("-h", "--help", action="store_true",
-                        help="show this help message and exit")
+    parser.add_argument(
+        "-v", "--version",
+        action="store_true",
+        help="show program's version number and exit"
+    )
+    parser.add_argument(
+        "-h", "--help",
+        action="store_true",
+        help="show this help message and exit"
+    )
     subparsers = parser.add_subparsers()
 
     # 添加子命令 start
