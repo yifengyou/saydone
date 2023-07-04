@@ -32,8 +32,6 @@ logger.addHandler(file_handler)
 
 
 # weixin : https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=f93f7403-bcbd-4053-be85-339a8017601c
-# PROMPT_COMMAND='if [ -e /var/log/saydone ]; then echo "$? $USER `fc -ln -0`" > /var/log/saydone ; fi'
-# # PROMPT_COMMAND='if [ -e /var/log/saydone ]; then set ret=$?; echo "$ret $USER `fc -ln -0`" > /var/log/saydone ; return $ret ; fi'
 
 # # 定义一个函数，将上一条命令的返回值写入一个文件
 # function save_exit_status() {
@@ -133,7 +131,7 @@ def msg_sender(args):
         runuser = msg_list[1]
         cmdline = " ".join(msg_list[2:])
         timestamp = beijing_timestamp()
-        format_msg = f"saydone消息播报:\n命令:{cmdline}\n返回值:{retcode}\n执行用户:{runuser}\n结束时间:{timestamp}"
+        format_msg = f"saydone消息播报:\n命令 : {cmdline}\n返回值 : {retcode}\n执行用户 : {runuser}\n结束时间 : {timestamp}"
 
         wecom_sender.send_text(msg=format_msg)
         logger.info(f"msg_sender send: \n{format_msg}")
